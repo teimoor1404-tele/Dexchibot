@@ -1,58 +1,54 @@
-import os, json, threading
-from flask import Flask
+import os, json
+from flask import Flask, request
 from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
+from telegram.ext import Dispatcher, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 CHAT_ID = int(os.environ.get("MY_CHAT_ID", 0))
-
+bot = Bot(token=TOKEN)
 app = Flask(__name__)
 
+if not os.path.exists("wallets.json"):
+    open("wallets.json","w").write("[]")
+
+def save(addr, c, w):
+    d=json.load(open("wallets.json")); d.append({"w":addr,"c":c,"wgt":w}); json.dump(d, open("wallets.json","w"))
+
 @app.route("/")
-def health():
-    return "OK", 200
+def h(): return "OK"
 
-def save_wallet(addr, cluster, weight):
-    try:
-        data = json.load(open("wallets.json"))
-    except:
-        data = []
-    data.append({"addr": addr, "cluster": cluster, "weight": weight})
-    json.dump(data, open("wallets.json", "w"))
-
-def start_bot():
-    bot = Bot(token=TOKEN)
-    updater = Updater(token=TOKEN, use_context=True)
-    dp = updater.dispatcher
+@app.route(f"/hook/{TOKEN}", methods=["POST","GET"])
+def hook():
+    if request.method=="GET":
+        bot.set_webhook(url=f"https://dexchibot.onrender.com/hook/{TOKEN}")
+        return "Webhook set"
+    update = Update.de_json(request.get_json(force=True), bot)
+    dp = Dispatcher(bot, None, workers=0, use_context=True)
     
-    def cmd_start(update, context):
-        kb = [
-            [InlineKeyboardButton("🔥 Cluster A", callback_data="c_a"),
-             InlineKeyboardButton("⚡ Cluster B", callback_data="c_b")],
-            [InlineKeyboardButton("💎 High Win", callback_data="c_h"),
-             InlineKeyboardButton("👤 Solo Trader", callback_data="c_s")]
-        ]
-        update.message.reply_text("کدام کلاستر؟", reply_markup=InlineKeyboardMarkup(kb))
+    def start(u,c):
+        kb=[[InlineKeyboardButton("🔥 A",callback_data="a"),InlineKeyboardButton("⚡ B",callback_data="b")],
+            [InlineKeyboardButton("💎 HighWin",callback_data="h"),InlineKeyboardButton("👤 Solo",callback_data="s")]]
+        bot.send_message(chat_id=u.message.chat_id, text="کلاستر:", reply_markup=InlineKeyboardMarkup(kb))
     
-    def btn_click(update, context):
-        q = update.callback_query
-        q.answer()
-        q.edit_message_text(f"انتخاب شد: {q.data}\nحالا آدرس کیف را بفرست.")
-        context.user_data["sel"] = q.data
+    def btn(u,c):
+        q=u.callback_query; q.answer()
+        c.user_data["sel"]=q.data
+        bot.send_message(chat_id=CHAT_ID,text=f"انتخاب: {q.data}\nحالا آدرس کیف را بفرست.")
     
-    def msg_text(update, context):
-        if "sel" in context.user_data:
-            save_wallet(update.message.text, context.user_data["sel"], 2)
-            update.message.reply_text("✅ ذخیره شد. از GMGN/Birdeye تأیید کن.")
-            del context.user_data["sel"]
+    def msg(u,c):
+        if "sel" in c.user_data:
+            save(u.message.text, c.user_data["sel"], 2)
+            bot.send_message(chat_id=CHAT_ID, text=f"✅ ذخیره شد: {u.message.text}")
+            del c.user_data["sel"]
         else:
-            update.message.reply_text("ابتدا /start بزن.")
+            bot.send_message(chat_id=CHAT_ID, text="ابتدا /start بزن.")
     
-    dp.add_handler(CommandHandler("start", cmd_start))
-    dp.add_handler(CallbackQueryHandler(btn_click))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, msg_text))
-    updater.start_polling()
-    updater.idle()
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(btn))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, msg))
+    dp.process_update(update)
+    return "ok"
 
-threading.Thread(target=start_bot, daemon=True).start()
-app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+if __name__=="__main__":
+    bot.set_webhook(url=f"https://dexchibot.onrender.com/hook/{TOKEN}")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)))
